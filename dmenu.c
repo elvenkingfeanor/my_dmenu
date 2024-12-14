@@ -24,7 +24,6 @@
 /* macros */
 #define INTERSECT(x,y,w,h,r)  (MAX(0, MIN((x)+(w),(r).x_org+(r).width)  - MAX((x),(r).x_org)) \
                              * MAX(0, MIN((y)+(h),(r).y_org+(r).height) - MAX((y),(r).y_org)))
-#define LENGTH(X)             (sizeof X / sizeof X[0])
 #define TEXTW(X)              (drw_fontset_getwidth(drw, (X)) + lrpad)
 #define NUMBERSMAXDIGITS      100
 #define NUMBERSBUFSIZE        (NUMBERSMAXDIGITS * 2) + 1
@@ -96,7 +95,7 @@ calcoffsets(void)
 	if (lines > 0)
 		n = lines * bh;
 	else
-		n = mw - (promptw + inputw + TEXTW("<") + TEXTW(">") + TEXTW(numbers));
+		n = mw - (promptw + inputw + TEXTW("<") + TEXTW(">"));
 	/* calculate which items will begin the next page and previous page */
 	for (i = 0, next = curr; next; next = next->right)
 		if ((i += (lines > 0) ? bh : textw_clamp(next->text, n)) > n)
@@ -208,7 +207,7 @@ drawmenu(void)
 		}
 		x += w;
 		for (item = curr; item != next; item = item->right)
-			x = drawitem(item, x, 0, textw_clamp(item->text, mw - x - TEXTW(">") - TEXTW(numbers)));
+			x = drawitem(item, x, 0, MIN(TEXTW(item->text), mw - x - TEXTW(">") - TEXTW(numbers)));
 		if (next) {
 			w = TEXTW(">");
 			drw_setscheme(drw, scheme[SchemeNorm]);
@@ -282,18 +281,18 @@ fuzzymatch(void)
 	matches = matchend = NULL;
 
 	/* walk through all items */
-	for (it = items; it && it->text; it++) {
+	for (it = items; it && it->text; ++it) {
 		if (text_len) {
 			itext_len = strlen(it->text);
 			pidx = 0; /* pointer */
 			sidx = eidx = -1; /* start of match, end of match */
 			/* walk through item text */
-			for (i = 0; i < itext_len && (c = it->text[i]); i++) {
+			for (i = 0; i < itext_len && (c = it->text[i]); ++i) {
 				/* fuzzy match pattern */
 				if (!fstrncmp(&text[pidx], &c, 1)) {
 					if(sidx == -1)
 						sidx = i;
-					pidx++;
+					++pidx;
 					if (pidx == text_len) {
 						eidx = i;
 						break;
@@ -308,7 +307,7 @@ fuzzymatch(void)
 				it->distance = log(sidx + 2) + (double)(eidx - sidx - text_len);
 				/* fprintf(stderr, "distance %s %f\n", it->text, it->distance); */
 				appenditem(it, &matches, &matchend);
-				number_of_matches++;
+				++number_of_matches;
 			}
 		} else {
 			appenditem(it, &matches, &matchend);
@@ -317,19 +316,18 @@ fuzzymatch(void)
 
 	if (number_of_matches) {
 		/* initialize array with matches */
-		if (!(fuzzymatches = realloc(fuzzymatches, number_of_matches * sizeof(struct item*))))
-			die("cannot realloc %u bytes:", number_of_matches * sizeof(struct item*));
-		for (i = 0, it = matches; it && i < number_of_matches; i++, it = it->right) {
+		if (!(fuzzymatches = realloc(fuzzymatches,
+		                             number_of_matches * sizeof(struct item *))))
+			die("cannot realloc %u bytes:", number_of_matches * sizeof(struct item *));
+		for (i = 0, it = matches; it && i < number_of_matches; ++i, it = it->right)
 			fuzzymatches[i] = it;
-		}
 		/* sort matches according to distance */
 		qsort(fuzzymatches, number_of_matches, sizeof(struct item*), compare_distance);
 		/* rebuild list of matches */
 		matches = matchend = NULL;
-		for (i = 0, it = fuzzymatches[i];  i < number_of_matches && it && \
-				it->text; i++, it = fuzzymatches[i]) {
+		for (i = 0, it = fuzzymatches[i]; i < number_of_matches && it &&
+		        it->text; ++i, it = fuzzymatches[i])
 			appenditem(it, &matches, &matchend);
-		}
 		free(fuzzymatches);
 	}
 	curr = sel = matches;
@@ -663,11 +661,11 @@ static void
 readstdin(void)
 {
 	char *line = NULL;
-	size_t i, junk, itemsiz = 0;
+	size_t i, itemsiz = 0, linesiz = 0;
 	ssize_t len;
 
 	/* read each line from stdin and add it to the item list */
-	for (i = 0; (len = getline(&line, &junk, stdin)) != -1; i++) {
+	for (i = 0; (len = getline(&line, &linesiz, stdin)) != -1; i++) {
 		if (i + 1 >= itemsiz) {
 			itemsiz += 256;
 			if (!(items = realloc(items, itemsiz * sizeof(*items))))
@@ -675,9 +673,10 @@ readstdin(void)
 		}
 		if (line[len - 1] == '\n')
 			line[len - 1] = '\0';
-		items[i].text = line;
+		if (!(items[i].text = strdup(line)))
+			die("strdup:");
+
 		items[i].out = 0;
-		line = NULL; /* next call of getline() allocates a new line */
 	}
 	free(line);
 	if (items)
@@ -803,11 +802,10 @@ setup(void)
 	swa.override_redirect = True;
 	swa.background_pixel = scheme[SchemeNorm][ColBg].pixel;
 	swa.event_mask = ExposureMask | KeyPressMask | VisibilityChangeMask;
-	win = XCreateWindow(dpy, parentwin, x, y, mw, mh, 0,
+	win = XCreateWindow(dpy, root, x, y, mw, mh, 0,
 	                    CopyFromParent, CopyFromParent, CopyFromParent,
 	                    CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
 	XSetClassHint(dpy, win, &ch);
-
 
 	/* input methods */
 	if ((xim = XOpenIM(dpy, NULL, NULL, NULL)) == NULL)
@@ -818,6 +816,7 @@ setup(void)
 
 	XMapRaised(dpy, win);
 	if (embed) {
+		XReparentWindow(dpy, win, parentwin, x, y);
 		XSelectInput(dpy, parentwin, FocusChangeMask | SubstructureNotifyMask);
 		if (XQueryTree(dpy, parentwin, &dw, &w, &dws, &du) && dws) {
 			for (i = 0; i < du && dws[i] != win; ++i)
@@ -885,10 +884,10 @@ main(int argc, char *argv[])
 			exit(0);
 		} else if (!strcmp(argv[i], "-b")) /* appears at the bottom of the screen */
 			topbar = 0;
+		else if (!strcmp(argv[i], "-F"))   /* disables fuzzy matching */
+			fuzzy = 0;
 		else if (!strcmp(argv[i], "-f"))   /* grabs keyboard before reading stdin */
 			fast = 1;
-		else if (!strcmp(argv[i], "-F"))   /* grabs keyboard before reading stdin */
-			fuzzy = 0;
 		else if (!strcmp(argv[i], "-i")) { /* case-insensitive item matching */
 			fstrncmp = strncasecmp;
 			fstrstr = cistrstr;
